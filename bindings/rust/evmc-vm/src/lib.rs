@@ -14,6 +14,7 @@ mod types;
 
 pub use container::EvmcContainer;
 pub use evmc_sys as ffi;
+use ffi::evmc_address;
 pub use types::*;
 
 /// Trait EVMC VMs have to implement.
@@ -30,8 +31,8 @@ pub trait EvmcVm {
         &self,
         revision: Revision,
         code: &'a [u8],
-        message: &'a ExecutionMessage,
-        context: Option<&'a mut ExecutionContext<'a>>,
+        message: ExecutionMessage,
+        context: ExecutionContext,
     ) -> ExecutionResult;
 }
 
@@ -59,8 +60,10 @@ pub struct ExecutionMessage {
     flags: u32,
     depth: i32,
     gas: i64,
-    recipient: Address,
-    sender: Address,
+    // recipient: Address,
+    destination: Vec<u8>,
+    // sender: Address,
+    sender: Vec<u8>,
     input: Option<Vec<u8>>,
     value: Uint256,
     create2_salt: Bytes32,
@@ -69,12 +72,14 @@ pub struct ExecutionMessage {
 
 /// EVMC transaction context structure.
 pub type ExecutionTxContext = ffi::evmc_tx_context;
+pub type ExecutionHostContext = ffi::evmc_host_context;
 
 /// EVMC context structure. Exposes the EVMC host functions, message data, and transaction context
 /// to the executing VM.
-pub struct ExecutionContext<'a> {
-    host: &'a ffi::evmc_host_interface,
-    context: *mut ffi::evmc_host_context,
+#[derive(Clone, Debug)]
+pub struct ExecutionContext {
+    host: *const ffi::evmc_host_interface,
+    context: *mut ExecutionHostContext,
     tx_context: ExecutionTxContext,
 }
 
@@ -143,9 +148,9 @@ impl ExecutionMessage {
         flags: u32,
         depth: i32,
         gas: i64,
-        recipient: Address,
-        sender: Address,
-        input: Option<&[u8]>,
+        destination: Vec<u8>,
+        sender: Vec<u8>,
+        input: Option<Vec<u8>>,
         value: Uint256,
         create2_salt: Bytes32,
         code_address: Address,
@@ -155,9 +160,9 @@ impl ExecutionMessage {
             flags,
             depth,
             gas,
-            recipient,
+            destination,
             sender,
-            input: input.map(|s| s.to_vec()),
+            input,
             value,
             create2_salt,
             code_address,
@@ -185,13 +190,28 @@ impl ExecutionMessage {
     }
 
     /// Read the recipient address of the message.
-    pub fn recipient(&self) -> &Address {
-        &self.recipient
+    // pub fn recipient(&self) -> &Address {
+    //     &self.recipient
+    // }
+
+    /// Read the pointer of destination address of the message, because liquid use string as address.
+    pub fn destination(&self) -> &Vec<u8> {
+        self.destination.as_ref()
     }
 
-    /// Read the sender address of the message.
-    pub fn sender(&self) -> &Address {
-        &self.sender
+    /// Read the length of destination address of the message.
+    pub fn destination_len(&self) -> i32 {
+        self.destination.len() as i32
+    }
+
+    /// Read the pointer of sender address of the message, because liquid use string as address.
+    pub fn sender(&self) -> &Vec<u8> {
+        self.sender.as_ref()
+    }
+
+    /// Read the length of sender address of the message.
+    pub fn sender_len(&self) -> i32 {
+        self.sender.len() as i32
     }
 
     /// Read the optional input message.
@@ -215,18 +235,23 @@ impl ExecutionMessage {
     }
 }
 
-impl<'a> ExecutionContext<'a> {
-    pub fn new(host: &'a ffi::evmc_host_interface, _context: *mut ffi::evmc_host_context) -> Self {
+impl ExecutionContext {
+    pub fn new(host: *const ffi::evmc_host_interface, _context: *mut ffi::evmc_host_context) -> Self {
+        assert!(!host.is_null());
         let _tx_context = unsafe {
             assert!((*host).get_tx_context.is_some());
             (*host).get_tx_context.unwrap()(_context)
         };
-
         ExecutionContext {
             host,
             context: _context,
             tx_context: _tx_context,
         }
+    }
+
+    /// Retrieve the host context.
+    pub fn get_host_context(&self) -> &ExecutionHostContext {
+        unsafe { self.context.as_ref().unwrap() }
     }
 
     /// Retrieve the transaction context.
@@ -345,10 +370,14 @@ impl<'a> ExecutionContext<'a> {
             flags: message.flags(),
             depth: message.depth(),
             gas: message.gas(),
-            recipient: *message.recipient(),
-            sender: *message.sender(),
-            input_data,
-            input_size,
+            recipient: evmc_address::default(),
+            destination_ptr: message.destination().as_ptr(),
+            destination_len: message.destination_len(),
+            sender: evmc_address::default(),
+            sender_ptr: message.sender().as_ptr(),
+            sender_len: message.sender_len(),
+            input_data: input_data,
+            input_size: input_size,
             value: *message.value(),
             create2_salt: *message.create2_salt(),
             code_address: *message.code_address(),
@@ -399,6 +428,107 @@ impl<'a> ExecutionContext<'a> {
                 self.context,
                 address as *const Address,
                 key as *const Bytes32,
+            )
+        }
+    }
+
+    /// WASM Check if an account exists.
+    pub fn wasm_account_exists(&self, address: &[u8]) -> bool {
+        unsafe {
+            assert!((*(*self.context).wasm_interface).account_exists.is_some());
+            (*(*self.context).wasm_interface).account_exists.unwrap()(
+                self.context,
+                address.as_ptr(),
+                address.len() as i32,
+            )
+        }
+    }
+
+    /// WASM Read from a storage key.
+    pub fn wasm_get_storage(&self, address: &[u8], key: &[u8], value: &mut [u8]) -> i32 {
+        unsafe {
+            assert!((*(*self.context).wasm_interface).get_storage.is_some());
+            (*(*self.context).wasm_interface).get_storage.unwrap()(
+                self.context,
+                address.as_ptr(),
+                address.len() as i32,
+                key.as_ptr(),
+                key.len() as i32,
+                value.as_mut_ptr(),
+                value.len() as i32,
+            )
+        }
+    }
+
+    /// WASM Set value of a storage key.
+    pub fn wasm_set_storage(&mut self, address: &[u8], key: &[u8], value: &[u8]) -> StorageStatus {
+        unsafe {
+            assert!((*(*self.context).wasm_interface).set_storage.is_some());
+            (*(*self.context).wasm_interface).set_storage.unwrap()(
+                self.context,
+                address.as_ptr(),
+                address.len() as i32,
+                key.as_ptr(),
+                key.len() as i32,
+                value.as_ptr(),
+                value.len() as i32,
+            )
+        }
+    }
+
+    /// WASM Get code size of an account.
+    pub fn wasm_get_code_size(&self, address: &[u8]) -> usize {
+        unsafe {
+            assert!((*(*self.context).wasm_interface).get_code_size.is_some());
+            (*(*self.context).wasm_interface).get_code_size.unwrap()(
+                self.context,
+                address.as_ptr(),
+                address.len() as i32,
+            )
+        }
+    }
+
+    /// WASM Get code hash of an account.
+    pub fn wasm_get_code_hash(&self, address: &[u8]) -> Bytes32 {
+        unsafe {
+            assert!((*(*self.context).wasm_interface).get_code_size.is_some());
+            (*(*self.context).wasm_interface).get_code_hash.unwrap()(
+                self.context,
+                address.as_ptr(),
+                address.len() as i32,
+            )
+        }
+    }
+
+    /// WASM Copy code of an account.
+    pub fn wasm_copy_code(&self, address: &[u8], code_offset: usize, buffer: &mut [u8]) -> usize {
+        unsafe {
+            assert!((*(*self.context).wasm_interface).copy_code.is_some());
+            (*(*self.context).wasm_interface).copy_code.unwrap()(
+                self.context,
+                address.as_ptr(),
+                address.len() as i32,
+                code_offset,
+                // FIXME: ensure that alignment of the array elements is OK
+                buffer.as_mut_ptr(),
+                buffer.len(),
+            )
+        }
+    }
+
+    /// WASM Emit a log.
+    pub fn wasm_emit_log(&mut self, address: &[u8], data: &[u8], topics: &[Bytes32]) {
+        unsafe {
+            assert!((*(*self.context).wasm_interface).emit_log.is_some());
+            (*(*self.context).wasm_interface).emit_log.unwrap()(
+                self.context,
+                address.as_ptr(),
+                address.len() as i32,
+                // FIXME: ensure that alignment of the array elements is OK
+                data.as_ptr(),
+                data.len(),
+                topics.as_ptr(),
+                topics.len(),
             )
         }
     }
@@ -511,8 +641,22 @@ impl From<&ffi::evmc_message> for ExecutionMessage {
             flags: message.flags,
             depth: message.depth,
             gas: message.gas,
-            recipient: message.recipient,
-            sender: message.sender,
+            destination: if message.destination_ptr.is_null() {
+                assert_eq!(message.destination_len, 0);
+                Vec::new()
+            } else if message.destination_len == 0 {
+                Vec::new()
+            } else {
+                from_buf_raw::<u8>(message.destination_ptr, message.destination_len as usize)
+            },
+            sender: if message.sender_ptr.is_null() {
+                assert_eq!(message.sender_len, 0);
+                Vec::new()
+            } else if message.sender_len == 0 {
+                Vec::new()
+            } else {
+                from_buf_raw::<u8>(message.sender_ptr, message.sender_len as usize)
+            },
             input: if message.input_data.is_null() {
                 assert_eq!(message.input_size, 0);
                 None
@@ -687,8 +831,8 @@ mod tests {
     #[test]
     fn message_new_with_input() {
         let input = vec![0xc0, 0xff, 0xee];
-        let recipient = Address { bytes: [32u8; 20] };
-        let sender = Address { bytes: [128u8; 20] };
+        let destination = vec![32u8; 20];
+        let sender = vec![128u8; 20];
         let value = Uint256 { bytes: [0u8; 32] };
         let create2_salt = Bytes32 { bytes: [255u8; 32] };
         let code_address = Address { bytes: [64u8; 20] };
@@ -698,9 +842,9 @@ mod tests {
             44,
             66,
             4466,
-            recipient,
-            sender,
-            Some(&input),
+            destination.clone(),
+            sender.clone(),
+            Some(input.clone()),
             value,
             create2_salt,
             code_address,
@@ -721,8 +865,8 @@ mod tests {
 
     #[test]
     fn message_from_ffi() {
-        let recipient = Address { bytes: [32u8; 20] };
-        let sender = Address { bytes: [128u8; 20] };
+        let destination = vec![32u8; 20];
+        let sender = vec![128u8; 20];
         let value = Uint256 { bytes: [0u8; 32] };
         let create2_salt = Bytes32 { bytes: [255u8; 32] };
         let code_address = Address { bytes: [64u8; 20] };
@@ -732,8 +876,12 @@ mod tests {
             flags: 44,
             depth: 66,
             gas: 4466,
-            recipient,
-            sender,
+            recipient: evmc_address::default(),
+            destination_ptr: destination.as_ptr(),
+            destination_len: destination.len() as i32,
+            sender: evmc_address::default(),
+            sender_ptr: sender.as_ptr(),
+            sender_len: sender.len() as i32,
             input_data: std::ptr::null(),
             input_size: 0,
             value,
@@ -747,8 +895,14 @@ mod tests {
         assert_eq!(ret.flags(), msg.flags);
         assert_eq!(ret.depth(), msg.depth);
         assert_eq!(ret.gas(), msg.gas);
-        assert_eq!(*ret.recipient(), msg.recipient);
-        assert_eq!(*ret.sender(), msg.sender);
+        assert_eq!(
+            *ret.destination(),
+            from_buf_raw::<u8>(msg.destination_ptr, msg.destination_len as usize)
+        );
+        assert_eq!(
+            *ret.sender(),
+            from_buf_raw::<u8>(msg.sender_ptr, msg.sender_len as usize)
+        );
         assert!(ret.input().is_none());
         assert_eq!(*ret.value(), msg.value);
         assert_eq!(*ret.create2_salt(), msg.create2_salt);
@@ -758,8 +912,8 @@ mod tests {
     #[test]
     fn message_from_ffi_with_input() {
         let input = vec![0xc0, 0xff, 0xee];
-        let recipient = Address { bytes: [32u8; 20] };
-        let sender = Address { bytes: [128u8; 20] };
+        let destination = vec![32u8; 20];
+        let sender = vec![128u8; 20];
         let value = Uint256 { bytes: [0u8; 32] };
         let create2_salt = Bytes32 { bytes: [255u8; 32] };
         let code_address = Address { bytes: [64u8; 20] };
@@ -769,8 +923,12 @@ mod tests {
             flags: 44,
             depth: 66,
             gas: 4466,
-            recipient,
-            sender,
+            recipient: evmc_address::default(),
+            destination_ptr: destination.as_ptr(),
+            destination_len: destination.len() as i32,
+            sender: evmc_address::default(),
+            sender_ptr: sender.as_ptr(),
+            sender_len: sender.len() as i32,
             input_data: input.as_ptr(),
             input_size: input.len(),
             value,
@@ -784,8 +942,14 @@ mod tests {
         assert_eq!(ret.flags(), msg.flags);
         assert_eq!(ret.depth(), msg.depth);
         assert_eq!(ret.gas(), msg.gas);
-        assert_eq!(*ret.recipient(), msg.recipient);
-        assert_eq!(*ret.sender(), msg.sender);
+        assert_eq!(
+            *ret.destination(),
+            from_buf_raw::<u8>(msg.destination_ptr, msg.destination_len as usize)
+        );
+        assert_eq!(
+            *ret.sender(),
+            from_buf_raw::<u8>(msg.sender_ptr, msg.sender_len as usize)
+        );
         assert!(ret.input().is_some());
         assert_eq!(*ret.input().unwrap(), input);
         assert_eq!(*ret.value(), msg.value);
@@ -874,7 +1038,7 @@ mod tests {
     fn execution_context() {
         let host_context = std::ptr::null_mut();
         let host_interface = get_dummy_host_interface();
-        let exe_context = ExecutionContext::new(&host_interface, host_context);
+        let exe_context = ExecutionContext::new(&mut host_interface, host_context);
         let a = exe_context.get_tx_context();
 
         let b = unsafe { get_dummy_tx_context(host_context) };
@@ -891,7 +1055,7 @@ mod tests {
         let host = get_dummy_host_interface();
         let host_context = std::ptr::null_mut();
 
-        let exe_context = ExecutionContext::new(&host, host_context);
+        let mut exe_context = ExecutionContext::new(&mut host, host_context);
 
         let a: usize = 105023;
         let b = exe_context.get_code_size(&test_addr);
@@ -902,18 +1066,18 @@ mod tests {
     #[test]
     fn test_call_empty_data() {
         // This address is useless. Just a dummy parameter for the interface function.
-        let test_addr = Address::default();
+        let test_addr = vec![];
         let host = get_dummy_host_interface();
         let host_context = std::ptr::null_mut();
-        let mut exe_context = ExecutionContext::new(&host, host_context);
+        let mut exe_context = ExecutionContext::new(&mut host, host_context);
 
         let message = ExecutionMessage::new(
             MessageKind::EVMC_CALL,
             0,
             0,
             6566,
-            test_addr,
-            test_addr,
+            test_addr.clone(),
+            test_addr.clone(),
             None,
             Uint256::default(),
             Bytes32::default(),
@@ -932,10 +1096,10 @@ mod tests {
     #[test]
     fn test_call_with_data() {
         // This address is useless. Just a dummy parameter for the interface function.
-        let test_addr = Address::default();
+        let test_addr = vec![];
         let host = get_dummy_host_interface();
         let host_context = std::ptr::null_mut();
-        let mut exe_context = ExecutionContext::new(&host, host_context);
+        let mut exe_context = ExecutionContext::new(&mut host, host_context);
 
         let data = vec![0xc0, 0xff, 0xfe];
 
@@ -944,9 +1108,9 @@ mod tests {
             0,
             0,
             6566,
-            test_addr,
-            test_addr,
-            Some(&data),
+            test_addr.clone(),
+            test_addr.clone(),
+            Some(data.clone()),
             Uint256::default(),
             Bytes32::default(),
             test_addr,

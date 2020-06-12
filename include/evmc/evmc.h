@@ -130,6 +130,9 @@ struct evmc_message
      * Defined as `r` in the Yellow Paper.
      */
     evmc_address recipient;
+    // The recipient of the message for wasm
+    const uint8_t* destination_ptr;
+    int32_t destination_len;
 
     /**
      * The sender of the message.
@@ -140,6 +143,9 @@ struct evmc_message
      * At the depth 0 this must be the transaction origin.
      */
     evmc_address sender;
+    // The sender of the message for wasm
+    const uint8_t* sender_ptr;
+    int32_t sender_len;
 
     /**
      * The message input data.
@@ -522,6 +528,12 @@ typedef evmc_bytes32 (*evmc_get_transient_storage_fn)(struct evmc_host_context* 
                                                       const evmc_address* address,
                                                       const evmc_bytes32* key);
 
+typedef int32_t (*evmc_get_fn)(struct evmc_host_context* context,
+                               const evmc_address* address,
+                               const char* _key,
+                               int32_t _keyLength,
+                               char* _value,
+                               int32_t _valueLength);
 
 /**
  * The effect of an attempt to modify a contract storage item.
@@ -869,6 +881,129 @@ struct evmc_host_interface
 
     /** Set transient storage callback function. */
     evmc_set_transient_storage_fn set_transient_storage;
+    evmc_get_fn get;
+    evmc_set_fn set;
+    evmc_register_asset_fn register_asset;
+    evmc_issue_fungible_asset_fn issue_fungible_asset;
+    evmc_issue_not_fungible_asset_fn issue_not_fungible_asset;
+    evmc_transfer_asset_fn transfer_asset;
+    evmc_get_asset_balance_fn get_asset_balance;
+    evmc_get_not_fungible_asset_info_fn get_not_fungible_asset_info;
+    evmc_get_asset_ids_fn get_asset_ids;
+};
+
+// wasm host interface
+typedef bool (*wasm_account_exists_fn)(struct evmc_host_context* context,
+                                       const uint8_t* address, int32_t addressLength);
+typedef enum evmc_storage_status (*wasm_set_storage_fn)(struct evmc_host_context* context,
+                                                const uint8_t* address,
+                                                int32_t addressLength,
+                                                const uint8_t* key,
+                                                int32_t keyLength,
+                                                const uint8_t* value,
+                                                int32_t valueLength);
+typedef int32_t (*wasm_get_storage_fn)(struct evmc_host_context* context, const uint8_t* address,
+                                int32_t addressLength, const uint8_t* _key, int32_t _keyLength,
+                                uint8_t* _value, int32_t _valueLength);
+
+typedef size_t (*wasm_get_code_size_fn)(struct evmc_host_context* context,
+                                        const uint8_t* address, int32_t addressLength);
+
+typedef evmc_bytes32 (*wasm_get_code_hash_fn)(struct evmc_host_context* context,
+                                              const uint8_t* address, int32_t addressLength);
+
+typedef size_t (*wasm_copy_code_fn)(struct evmc_host_context* context,
+                                    const uint8_t* address, int32_t addressLength,
+                                    size_t code_offset,
+                                    uint8_t* buffer_data,
+                                    size_t buffer_size);
+
+typedef void (*wasm_emit_log_fn)(struct evmc_host_context* context,
+                                 const uint8_t* address, int32_t addressLength,
+                                 const uint8_t* data,
+                                 size_t data_size,
+                                 const evmc_bytes32 topics[],
+                                 size_t topics_count);
+
+typedef bool (*wasm_register_asset_fn)(struct evmc_host_context* context,
+                                       const char* assetName,
+                                       int32_t assetNameLength,
+                                       const evmc_address* issuer,
+                                       bool fungible,
+                                       uint64_t total,
+                                       const char* description,
+                                       int32_t descriptionLength);
+
+typedef bool (*wasm_issue_fungible_asset_fn)(struct evmc_host_context* context,
+                                             const uint8_t* address, int32_t addressLength,
+                                             const char* assetName,
+                                             int32_t assetNameLength,
+                                             uint64_t amount);
+
+typedef uint64_t (*wasm_issue_not_fungible_asset_fn)(struct evmc_host_context* context,
+                                                     const uint8_t* address, int32_t addressLength,
+                                                     const char* assetName,
+                                                     int32_t assetNameLength,
+                                                     const char* uri,
+                                                     int32_t uriLength);
+
+typedef bool (*wasm_transfer_asset_fn)(struct evmc_host_context* context,
+                                       const uint8_t* address, int32_t addressLength,
+                                       const char* assetName,
+                                       int32_t assetNameLength,
+                                       uint64_t amountOrID,
+                                       bool fromSelf);
+
+typedef uint64_t (*wasm_get_asset_balance_fn)(struct evmc_host_context* context,
+                                              const uint8_t* address, int32_t addressLength,
+                                              const char* assetName,
+                                              int32_t assetNameLength);
+
+typedef int32_t (*wasm_get_asset_ids_fn)(struct evmc_host_context* context,
+                                         const uint8_t* address, int32_t addressLength,
+                                         const char* assetName,
+                                         int32_t assetNameLength,
+                                         char* value,
+                                         int32_t valueLength);
+
+typedef int32_t (*wasm_get_not_fungible_asset_info_fn)(struct evmc_host_context* context,
+                                                       const uint8_t* address, int32_t addressLength,
+                                                       const char* assetName,
+                                                       int32_t assetNameLength,
+                                                       uint64_t assetID,
+                                                       char* value,
+                                                       int32_t valueLength);
+
+struct wasm_host_interface
+{
+    /** Check account existence callback function. */
+    wasm_account_exists_fn account_exists;
+
+    /** Get storage callback function. */
+    wasm_get_storage_fn get_storage;
+
+    /** Set storage callback function. */
+    wasm_set_storage_fn set_storage;
+
+    /** Get code size callback function. */
+    wasm_get_code_size_fn get_code_size;
+
+    /** Get code hash callback function. */
+    wasm_get_code_hash_fn get_code_hash;
+
+    /** Copy code callback function. */
+    wasm_copy_code_fn copy_code;
+
+    /** Emit log callback function. */
+    wasm_emit_log_fn emit_log;
+
+    wasm_register_asset_fn register_asset;
+    wasm_issue_fungible_asset_fn issue_fungible_asset;
+    wasm_issue_not_fungible_asset_fn issue_not_fungible_asset;
+    wasm_transfer_asset_fn transfer_asset;
+    wasm_get_asset_balance_fn get_asset_balance;
+    wasm_get_not_fungible_asset_info_fn get_not_fungible_asset_info;
+    wasm_get_asset_ids_fn get_asset_ids;
 };
 
 
@@ -1082,7 +1217,9 @@ enum evmc_capabilities
      *
      * This capability is **experimental** and MAY be removed without notice.
      */
-    EVMC_CAPABILITY_PRECOMPILES = (1u << 2)
+    EVMC_CAPABILITY_PRECOMPILES = (1u << 2),
+
+    EVMC_CAPABILITY_FBWASM = (1u << 8)
 };
 
 /**
@@ -1169,6 +1306,30 @@ struct evmc_vm
     evmc_set_option_fn set_option;
 };
 
+struct evmc_gas_metrics
+{
+    int16_t createGas;
+    int16_t sstoreSetGas;
+    int16_t sstoreResetGas;
+    int16_t sloadGas;
+    int16_t valueTransferGas;
+    int16_t callStipend;
+    int16_t callNewAccount;
+};
+/**
+ * @struct evmc_host_context
+ * The opaque data type representing the Host execution context.
+ * @see evmc_execute_fn().
+ */
+struct evmc_host_context
+{
+    const struct evmc_host_interface* interface;
+    const struct wasm_host_interface* wasm_interface;
+    evmc_bytes32 (*hash_fn)(const uint8_t* data, size_t size);
+    bool isSMCrypto;
+    uint32_t version;
+    const struct evmc_gas_metrics* metrics;
+};
 /* END Python CFFI declarations */
 
 #ifdef EVMC_DOCUMENTATION
@@ -1195,4 +1356,3 @@ struct evmc_vm* evmc_create_example_vm(void);
 #endif
 
 #endif
-/** @} */

@@ -21,8 +21,8 @@
 //!             ExampleVM {}
 //!     }
 //!
-//!     fn execute(&self, revision: evmc_vm::ffi::evmc_revision, code: &[u8], message: &evmc_vm::ExecutionMessage, context: Option<&mut evmc_vm::ExecutionContext>) -> evmc_vm::ExecutionResult {
-//!             evmc_vm::ExecutionResult::success(1337, 0, None)
+//!     fn execute(&self, revision: evmc_vm::ffi::evmc_revision, code: &[u8], message: evmc_vm::ExecutionMessage, context: evmc_vm::ExecutionContext) -> evmc_vm::ExecutionResult {
+//!             evmc_vm::ExecutionResult::success(1337, None)
 //!     }
 //! }
 //! ```
@@ -162,6 +162,7 @@ impl VMMetaData {
                     "evm" => ret |= 1,
                     "ewasm" => ret |= 1 << 1,
                     "precompiles" => ret |= 1 << 2,
+                    "fbwasm" => ret |= 1 << 8,
                     _ => panic!("Invalid capability specified."),
                 }
             }
@@ -346,7 +347,7 @@ fn build_create_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
     // Note: we can get CStrs unchecked because we did the checks on instantiation of VMMetaData.
     quote! {
         #[no_mangle]
-        extern "C" fn #fn_ident() -> *const ::evmc_vm::ffi::evmc_vm {
+        pub extern "C" fn #fn_ident() -> *mut ::evmc_vm::ffi::evmc_vm {
             let new_instance = ::evmc_vm::ffi::evmc_vm {
                 abi_version: ::evmc_vm::ffi::EVMC_ABI_VERSION as i32,
                 destroy: Some(__evmc_destroy),
@@ -410,6 +411,7 @@ fn build_execute_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
 
             assert!(!instance.is_null());
             assert!(!msg.is_null());
+            assert!(!host.is_null());
 
             let execution_message: ::evmc_vm::ExecutionMessage = unsafe {
                 msg.as_ref().expect("EVMC message is null").into()
@@ -431,17 +433,13 @@ fn build_execute_fn(names: &VMNameSet) -> proc_macro2::TokenStream {
             };
 
             let result = ::std::panic::catch_unwind(|| {
-                if host.is_null() {
-                    container.execute(revision, code_ref, &execution_message, None)
-                } else {
-                    let mut execution_context = unsafe {
-                        ::evmc_vm::ExecutionContext::new(
-                            host.as_ref().expect("EVMC host is null"),
-                            context,
-                        )
-                    };
-                    container.execute(revision, code_ref, &execution_message, Some(&mut execution_context))
-                }
+                let mut execution_context = unsafe {
+                    ::evmc_vm::ExecutionContext::new(
+                        host,
+                        context,
+                    )
+                };
+                container.execute(revision, code_ref, execution_message, execution_context)
             });
 
             let result = if result.is_err() {

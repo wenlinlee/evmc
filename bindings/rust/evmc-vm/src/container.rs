@@ -82,8 +82,8 @@ mod tests {
             &self,
             _revision: evmc_sys::evmc_revision,
             _code: &[u8],
-            _message: &ExecutionMessage,
-            _context: Option<&mut ExecutionContext>,
+            _message: ExecutionMessage,
+            _context: ExecutionContext,
         ) -> ExecutionResult {
             ExecutionResult::failure()
         }
@@ -157,15 +157,15 @@ mod tests {
         };
         let host_context = std::ptr::null_mut();
 
-        let mut context = ExecutionContext::new(&host, host_context);
+        let mut context = ExecutionContext::new(&mut host, host_context);
         let container = EvmcContainer::<TestVm>::new(instance);
         assert_eq!(
             container
                 .execute(
                     evmc_sys::evmc_revision::EVMC_PETERSBURG,
                     &code,
-                    &message,
-                    Some(&mut context)
+                    message.clone(),
+                    Some(context)
                 )
                 .status_code(),
             ::evmc_sys::evmc_status_code::EVMC_FAILURE
@@ -173,15 +173,15 @@ mod tests {
 
         let ptr = unsafe { EvmcContainer::into_ffi_pointer(container) };
 
-        let mut context = ExecutionContext::new(&host, host_context);
+        let mut context = ExecutionContext::new(&mut host, host_context);
         let container = unsafe { EvmcContainer::<TestVm>::from_ffi_pointer(ptr) };
         assert_eq!(
             container
                 .execute(
                     evmc_sys::evmc_revision::EVMC_PETERSBURG,
                     &code,
-                    &message,
-                    Some(&mut context)
+                    message,
+                    Some(context)
                 )
                 .status_code(),
             ::evmc_sys::evmc_status_code::EVMC_FAILURE
