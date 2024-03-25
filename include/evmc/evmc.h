@@ -43,7 +43,7 @@ extern "C" {
  *
  * @see @ref versioning
  */
-int32_t EVMC_ABI_VERSION = 10;
+const int32_t EVMC_ABI_VERSION = 10;
 
 
 /**
