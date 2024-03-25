@@ -526,12 +526,6 @@ typedef evmc_bytes32 (*evmc_get_transient_storage_fn)(struct evmc_host_context* 
                                                       const evmc_address* address,
                                                       const evmc_bytes32* key);
 
-typedef int32_t (*evmc_get_fn)(struct evmc_host_context* context,
-                               const evmc_address* address,
-                               const char* _key,
-                               int32_t _keyLength,
-                               char* _value,
-                               int32_t _valueLength);
 
 /**
  * The effect of an attempt to modify a contract storage item.
@@ -879,15 +873,6 @@ struct evmc_host_interface
 
     /** Set transient storage callback function. */
     evmc_set_transient_storage_fn set_transient_storage;
-    evmc_get_fn get;
-    evmc_set_fn set;
-    evmc_register_asset_fn register_asset;
-    evmc_issue_fungible_asset_fn issue_fungible_asset;
-    evmc_issue_not_fungible_asset_fn issue_not_fungible_asset;
-    evmc_transfer_asset_fn transfer_asset;
-    evmc_get_asset_balance_fn get_asset_balance;
-    evmc_get_not_fungible_asset_info_fn get_not_fungible_asset_info;
-    evmc_get_asset_ids_fn get_asset_ids;
 };
 
 // wasm host interface
